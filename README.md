@@ -80,7 +80,7 @@ Serviço de ativação de produtos: registro de solicitações de ativação, co
 | **Serviço** | `ActivationServiceImpl` | Validação defensiva de campos, orquestração de criação (anti-duplicidade + retry idempotente), consulta, listagem paginada |
 | **Persistência** | `ActivationRepository`, Flyway `V1__create_activations_table.sql` | Acesso a dados JPA, migração versionada, constraint `UNIQUE` |
 | **Integração** | `ActivationDispatcher`, `ActivationProcessor`, `RestClientActivationProviderClient` | Chamada assíncrona pós-commit ao provedor, retry com backoff, transição de status por retorno HTTP |
-| **Transversal** | `GlobalExceptionHandler`, `CorrelationIdFilter`, `SecurityConfig`, `AsyncConfig`, `TransactionConfig` | Problem Details (RFC 9457), correlação de erro (`X-Trace-Id`), OAuth2 Resource Server condicional, thread pool, template de transação |
+| **Transversal** | `GlobalExceptionHandler`, `CorrelationIdFilter`, `SecurityConfig`, `AsyncConfig`, `TransactionConfig`, `ResilienceConfig` | Problem Details (RFC 9457), correlação de erro (`X-Trace-Id`), OAuth2 Resource Server condicional, thread pool, template de transação, circuit breaker do provedor |
 
 ### Decisões de empacotamento
 
@@ -92,6 +92,7 @@ Serviço de ativação de produtos: registro de solicitações de ativação, co
 | Assíncrono pós-commit para chamada remota | Evita segurar conexão de banco durante HTTP lento | [ADR-002](docs/adr/ADR-002-processamento-assincrono-pos-commit.md) |
 | Flyway como fonte de verdade do schema | Migrações imutáveis, Hibernate só valida | [ADR-004](docs/adr/ADR-004-flyway-migracao.md) |
 | Constraint `UNIQUE` + recuperação pós-corrida | Garantia final no banco; SELECT-then-INSERT não basta (TOCTOU) | [ADR-001](docs/adr/ADR-001-estrategia-anti-duplicidade.md) |
+| Circuit breaker na borda do provedor (Resilience4j) | Provedor morto não derruba o processamento; fail-fast via fallback 503 | [ADR-006](docs/adr/ADR-006-circuit-breaker-resilience4j.md) |
 | Security Resource Server condicional | Dev local sem IdP; produção liga via env var | [ADR-003](docs/adr/ADR-003-seguranca-resource-server.md) |
 | Compose só com infraestrutura (app roda local) | Iteração rápida de código sem rebuild Docker | [ADR-005](docs/adr/ADR-005-app-local-compose-infra.md) |
 
@@ -165,7 +166,7 @@ A aplicação fica em `http://localhost:8080`.
 ./mvnw verify
 ```
 
-Executa testes unitários (JUnit 5 + Mockito), testes de API (`@WebMvcTest` + MockMvc) e testes de integração com Testcontainers (PostgreSQL real) e stub do provedor. **54 testes, 0 falhas.**
+Executa testes unitários (JUnit 5 + Mockito), testes de API (`@WebMvcTest` + MockMvc) e testes de integração com Testcontainers (PostgreSQL real) e stub do provedor. **57 testes, 0 falhas.**
 
 ### Ambiente completo via Docker (produção / smoke test)
 
@@ -277,6 +278,7 @@ Os demais métodos da implementação (`validateRequest`, `createInTransaction`,
   | HTTP 429/408/503 | `PENDING` (retry) com backoff | Sim | Rate limit / temporário |
 
 - **Retry com backoff linear** (`backoff-ms * tentativa`), limite de tentativas em `app.provider.max-attempts`.
+- **Circuit breaker (Resilience4j)** — [ADR-006](docs/adr/ADR-006-circuit-breaker-resilience4j.md): `@CircuitBreaker(name = "provider")` envolve `RestClientActivationProviderClient.activate`, a única porta de saída para o provedor. Falhas registradas: exceções de rede e respostas HTTP `>= 500`. Com o breaker aberto, o `fallbackMethod` devolve `503` sintético, que segue o mesmo caminho de retry (fail-fast, sem tocar a rede). Config: janela COUNT_BASED de 10, mínimo 5 chamadas, 50% de falhas, 10s em open, 3 em half-open. Estado em `/actuator/circuitbreakers`.
 - **Modo de processamento** configurável: `ASYNC` (default), `SYNC` ou `DISABLED` (testes).
 
 ### Transições de estado (domínio)
@@ -318,7 +320,7 @@ Problem Details (RFC 9457) via `ProblemDetail` do Spring 6:
 |-------|-----------|-------------|
 | Unitário (sem Spring) | JUnit 5 + Mockito | Transições de domínio, lógica do `ActivationProcessor`, validação e regras do `ActivationService` (duplicidade, corrida, trim) |
 | Web | `@WebMvcTest` + MockMvc | Validação de DTO, status codes, Problem Details, segurança (401/403) |
-| Integração | Testcontainers (PostgreSQL) + stub do provedor | Criação real, corrida concorrente (8 threads → 1 registro), processamento assíncrono (Awaitility) |
+| Integração | Testcontainers (PostgreSQL) + stub do provedor | Criação real, corrida concorrente (8 threads → 1 registro), processamento assíncrono (Awaitility), circuit breaker abrindo com provedor falhando (fail-fast sem chamada de rede) |
 
 ---
 
@@ -361,7 +363,6 @@ Problem Details (RFC 9457) via `ProblemDetail` do Spring 6:
 
 ## Pontos pendentes
 
-- Resiliência com Resilience4j (circuit breaker) — descrita, não implementada.
 - Isolamento entre consumidores (BOLA) — requer claims no JWT mapeadas por tenant.
 - Rate limiting — faria com bucket4j ou gateway (Kong/APISIX).
 

@@ -1,5 +1,7 @@
 # Product Activation — Desafio Técnico Java Pleno/Sênior
 
+[![CI](https://github.com/filipeFerreira7/product-activation-desafio/actions/workflows/ci.yml/badge.svg)](https://github.com/filipeFerreira7/product-activation-desafio/actions/workflows/ci.yml)
+
 Serviço de ativação de produtos: registro de solicitações de ativação, consulta de status e integração com um provedor externo.
 
 ---
@@ -166,7 +168,7 @@ A aplicação fica em `http://localhost:8080`.
 ./mvnw verify
 ```
 
-Executa testes unitários (JUnit 5 + Mockito), testes de API (`@WebMvcTest` + MockMvc) e testes de integração com Testcontainers (PostgreSQL real) e stub do provedor. **57 testes, 0 falhas.**
+Executa testes unitários (JUnit 5 + Mockito), testes de API (`@WebMvcTest` + MockMvc) e testes de integração com Testcontainers (PostgreSQL real) e stub do provedor. **57 testes, 0 falhas.** O mesmo comando roda no CI: GitHub Actions (`.github/workflows/ci.yml`) executa `./mvnw verify` a cada push/PR na `main`, com cache do Maven e upload dos relatórios em caso de falha.
 
 ### Ambiente completo via Docker (produção / smoke test)
 
@@ -348,7 +350,8 @@ Problem Details (RFC 9457) via `ProblemDetail` do Spring 6:
 - Imagem multi-stage (`eclipse-temurin:21-jdk-alpine` build → `jre-alpine` runtime), usuário **non-root**, `JAVA_OPTS` com `MaxRAMPercentage=75`.
 - Health checks, `server.shutdown=graceful`, dependências ordenadas no Compose.
 - Configuração 100% por variáveis de ambiente. Segredos via secret manager (AWS Secrets Manager / Vault / GCP Secret Manager).
-- CI/CD: pipeline builda imagem, roda `./mvnw verify` e publica; deploy via rolling update.
+- CI: pipeline GitHub Actions implementada (`.github/workflows/ci.yml`) — build e testes com `./mvnw verify` a cada push/PR, cache do Maven e artefato com os relatórios de teste quando algo falha.
+- CD: pipeline de build de imagem, publicação no registry e deploy via rolling update — descrito como evolução da CI acima.
 
 ---
 

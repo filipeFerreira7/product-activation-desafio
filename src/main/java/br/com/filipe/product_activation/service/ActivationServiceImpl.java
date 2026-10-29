@@ -5,6 +5,7 @@ import br.com.filipe.product_activation.dto.ActivationResponseDTO;
 import br.com.filipe.product_activation.dto.CreateActivationResult;
 import br.com.filipe.product_activation.exception.ActivationNotFoundException;
 import br.com.filipe.product_activation.exception.DuplicateActivationException;
+import br.com.filipe.product_activation.exception.InvalidActivationRequestException;
 import br.com.filipe.product_activation.integration.ActivationDispatcher;
 import br.com.filipe.product_activation.model.Activation;
 import br.com.filipe.product_activation.model.ActivationStatus;
@@ -45,11 +46,27 @@ public class ActivationServiceImpl implements ActivationService {
 
     @Override
     public CreateActivationResult create(ActivationRequestDTO dto) {
+        validateRequest(dto);
         try {
             return transactionTemplate.execute(status -> createInTransaction(dto));
         } catch (DataIntegrityViolationException ex) {
             log.info("Conflito de unicidade detectado para externalId={}, resolvendo corrida", dto.externalId());
             return transactionTemplate.execute(status -> recoverFromRace(dto));
+        }
+    }
+
+    private void validateRequest(ActivationRequestDTO dto) {
+        if (dto == null) {
+            throw new InvalidActivationRequestException("body", "corpo da requisicao nao pode ser nulo");
+        }
+        requireNotBlank(dto.externalId(), "externalId");
+        requireNotBlank(dto.customerId(), "customerId");
+        requireNotBlank(dto.productCode(), "productCode");
+    }
+
+    private void requireNotBlank(String value, String field) {
+        if (value == null || value.isBlank()) {
+            throw new InvalidActivationRequestException(field, "nao pode ser vazio");
         }
     }
 

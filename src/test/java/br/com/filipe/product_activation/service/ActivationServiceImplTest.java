@@ -5,6 +5,7 @@ import br.com.filipe.product_activation.dto.ActivationResponseDTO;
 import br.com.filipe.product_activation.dto.CreateActivationResult;
 import br.com.filipe.product_activation.exception.ActivationNotFoundException;
 import br.com.filipe.product_activation.exception.DuplicateActivationException;
+import br.com.filipe.product_activation.exception.InvalidActivationRequestException;
 import br.com.filipe.product_activation.integration.ActivationDispatcher;
 import br.com.filipe.product_activation.model.Activation;
 import br.com.filipe.product_activation.model.ActivationStatus;
@@ -37,6 +38,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -82,6 +84,50 @@ class ActivationServiceImplTest {
         assertThat(result.dto().status()).isEqualTo(ActivationStatus.PENDING);
         assertThat(result.dto().createdAt()).isEqualTo(clock.instant());
         verify(dispatcher).dispatch(result.dto().id());
+    }
+
+    @Test
+    void createTrimsFieldsBeforeLookupAndSave() {
+        when(repository.findByExternalId("EXT-9")).thenReturn(Optional.empty());
+        when(repository.saveAndFlush(any(Activation.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        CreateActivationResult result = service.create(dto("  EXT-9  ", "  CUST-9  ", "  INTERNET-500  "));
+
+        assertThat(result.created()).isTrue();
+        assertThat(result.dto().externalId()).isEqualTo("EXT-9");
+        assertThat(result.dto().customerId()).isEqualTo("CUST-9");
+        assertThat(result.dto().productCode()).isEqualTo("INTERNET-500");
+    }
+
+    @Test
+    void createWithBlankExternalIdThrowsValidation() {
+        assertThatThrownBy(() -> service.create(dto("   ", "CUST-1", "INTERNET-500")))
+                .isInstanceOf(InvalidActivationRequestException.class)
+                .hasMessageContaining("nao pode ser vazio");
+        verify(repository, never()).findByExternalId(any());
+        verify(repository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void createWithNullCustomerIdThrowsValidation() {
+        assertThatThrownBy(() -> service.create(dto("EXT-1", null, "INTERNET-500")))
+                .isInstanceOf(InvalidActivationRequestException.class);
+        verify(repository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void createWithBlankProductCodeThrowsValidation() {
+        assertThatThrownBy(() -> service.create(dto("EXT-1", "CUST-1", " ")))
+                .isInstanceOf(InvalidActivationRequestException.class);
+        verify(repository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void createWithNullDtoThrowsValidation() {
+        assertThatThrownBy(() -> service.create(null))
+                .isInstanceOf(InvalidActivationRequestException.class);
+        verifyNoInteractions(repository);
+        verifyNoInteractions(dispatcher);
     }
 
     @Test

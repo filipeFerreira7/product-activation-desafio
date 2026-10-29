@@ -6,6 +6,7 @@ import br.com.filipe.product_activation.dto.CreateActivationResult;
 import br.com.filipe.product_activation.exception.ActivationNotFoundException;
 import br.com.filipe.product_activation.exception.DuplicateActivationException;
 import br.com.filipe.product_activation.exception.GlobalExceptionHandler;
+import br.com.filipe.product_activation.exception.InvalidActivationRequestException;
 import br.com.filipe.product_activation.model.ActivationStatus;
 import br.com.filipe.product_activation.service.ActivationService;
 import org.junit.jupiter.api.Test;
@@ -110,6 +111,27 @@ class ActivationControllerTest {
                 .andExpect(jsonPath("$.title").value("Dados invalidos"))
                 .andExpect(jsonPath("$.status").value(400))
                 .andExpect(jsonPath("$.errors").isArray());
+    }
+
+    @Test
+    void createWithServiceValidationFailureReturns400() throws Exception {
+        when(activationService.create(any()))
+                .thenThrow(new InvalidActivationRequestException("externalId", "nao pode ser vazio"));
+
+        mockMvc.perform(post("/api/v1/requests")
+                        .with(jwt().authorities(() -> "SCOPE_activation:write"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "externalId": "EXT-1",
+                                  "customerId": "CUST-1",
+                                  "productCode": "INTERNET-500"
+                                }
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.title").value("Dados invalidos"))
+                .andExpect(jsonPath("$.errors[0].field").value("externalId"))
+                .andExpect(jsonPath("$.errors[0].message").value("nao pode ser vazio"));
     }
 
     @Test

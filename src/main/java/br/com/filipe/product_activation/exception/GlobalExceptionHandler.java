@@ -32,6 +32,14 @@ public class GlobalExceptionHandler {
         return problem;
     }
 
+    @ExceptionHandler(InvalidActivationRequestException.class)
+    public ProblemDetail handleInvalidActivationRequest(InvalidActivationRequestException ex) {
+        ProblemDetail problem = problem(HttpStatus.BAD_REQUEST, "Dados invalidos",
+                "Um ou mais campos nao passaram na validacao.");
+        problem.setProperty("errors", List.of(new FieldErrorDetail(ex.getField(), ex.getMessage())));
+        return problem;
+    }
+
     @ExceptionHandler(ConstraintViolationException.class)
     public ProblemDetail handleConstraintViolation(ConstraintViolationException ex) {
         ProblemDetail problem = problem(HttpStatus.BAD_REQUEST, "Dados invalidos",

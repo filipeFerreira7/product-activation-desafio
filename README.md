@@ -77,7 +77,7 @@ Serviço de ativação de produtos: registro de solicitações de ativação, co
 |--------|------------|------------------|
 | **API** | `ActivationController`, DTOs (`record`) | Expor endpoints REST, validação de entrada, mapeamento DTO ↔ entidade |
 | **Domínio** | `Activation`, `ActivationStatus` | Regras de vida: transições controladas (`markProcessing`, `markCompleted`, `markFailed`, `backToPending`), lock otimista (`@Version`) |
-| **Serviço** | `ActivationServiceImpl` | Orquestração de criação (anti-duplicidade), consulta, listagem paginada |
+| **Serviço** | `ActivationServiceImpl` | Validação defensiva de campos, orquestração de criação (anti-duplicidade + retry idempotente), consulta, listagem paginada |
 | **Persistência** | `ActivationRepository`, Flyway `V1__create_activations_table.sql` | Acesso a dados JPA, migração versionada, constraint `UNIQUE` |
 | **Integração** | `ActivationDispatcher`, `ActivationProcessor`, `RestClientActivationProviderClient` | Chamada assíncrona pós-commit ao provedor, retry com backoff, transição de status por retorno HTTP |
 | **Transversal** | `GlobalExceptionHandler`, `CorrelationIdFilter`, `SecurityConfig`, `AsyncConfig`, `TransactionConfig` | Problem Details (RFC 9457), correlação de erro (`X-Trace-Id`), OAuth2 Resource Server condicional, thread pool, template de transação |
@@ -105,7 +105,8 @@ POST /api/v1/requests
         ▼
 ┌───────────────────────────────────────────────────┐
 │ 1. Controller valida DTO (Bean Validation)        │
-│ 2. Service busca por externalId                   │
+│ 2. Service valida campos (defensivo) e busca      │
+│    por externalId                                  │
 │    ├─ existe + mesmo conteúdo → 200 (idempotente) │
 │    ├─ existe + conteúdo diferente → 409 Conflict  │
 │    └─ não existe → INSERT (com UNIQUE constraint) │
@@ -164,7 +165,7 @@ A aplicação fica em `http://localhost:8080`.
 ./mvnw verify
 ```
 
-Executa testes unitários (JUnit 5 + Mockito), testes de API (`@WebMvcTest` + MockMvc) e testes de integração com Testcontainers (PostgreSQL real) e stub do provedor. **48 testes, 0 falhas.**
+Executa testes unitários (JUnit 5 + Mockito), testes de API (`@WebMvcTest` + MockMvc) e testes de integração com Testcontainers (PostgreSQL real) e stub do provedor. **54 testes, 0 falhas.**
 
 ### Ambiente completo via Docker (produção / smoke test)
 
@@ -188,7 +189,7 @@ Ou reintroduza o serviço `app` no `compose.yml` sob um profile (ver [ADR-005](d
 
 | Método | Rota | Escopo | Descrição |
 |--------|------|--------|-----------|
-| POST | `/api/v1/requests` | `activation:write` | Cria solicitação (201 + `Location`; 200 em retry idempotente; 409 em conflito) |
+| POST | `/api/v1/requests` | `activation:write` | Cria solicitação (201 + `Location`; 200 em retry idempotente; 409 em conflito; 400 em dados inválidos) |
 | GET | `/api/v1/requests/{id}` | `activation:read` | Consulta por id (404 se inexistente) |
 | GET | `/api/v1/requests?status=&customerId=&page=&size=` | `activation:read` | Listagem paginada com filtros |
 | GET | `/actuator/health` | público | Health check |
@@ -224,14 +225,45 @@ curl http://localhost:8080/api/v1/requests/{id}
 
 - **Constraint UNIQUE** em `external_id` no banco (`uk_activations_external_id`) — é a garantia final, pois "verificar e depois inserir" sozinho não evita corrida entre duas transações (TOCTOU).
 - **Tratamento de corrida**: se o `INSERT` violar a constraint, a transação é revertida e uma **nova transação** reconsulta o registro. Assim a query de recuperação não roda em transação abortada (erro `23505` + `current transaction is aborted` do PostgreSQL).
-- **Semântica de resposta**:
-  - Mesmo `externalId` + mesmo conteúdo → **200 OK** com o registro existente (retry legítimo do sistema de origem é idempotente).
-  - Mesmo `externalId` + conteúdo diferente → **409 Conflict** com Problem Details.
-  - Duas requisições em paralelo → uma cria (201); a outra recebe 200 com o mesmo registro (ou 409 se o conteúdo divergir).
+
+**Decisão de semântica** — alinhada ao Item 3 do desafio: o obrigatório é que o sistema "não deve criar duas solicitações com o mesmo `externalId`"; a resposta em caso de repetição é decisão do candidato (o enunciado lista "200 com o registro existente, ou 409?" — este projeto adota as duas, conforme o cenário):
+
+| Cenário | Resposta HTTP | Comportamento |
+|---------|---------------|---------------|
+| Mesmo `externalId` + mesmo conteúdo (`customerId` + `productCode`) | **200 OK** | Retorna a ativação existente, sem criar outra nem reprocessar. |
+| Mesmo `externalId` + conteúdo divergente | **409 Conflict** | Rejeita com Problem Details; evita que um retry incorreto altere silenciosamente a intenção original. |
+| Duas requisições idênticas em paralelo | **201** (uma) + **200** (demais) | Constraint UNIQUE garante um único registro; as perdedoras recebem o registro vencedor via recuperação de corrida. |
+
+**Por que 200 no retry legítimo?** A repetição não é conflito de negócio: a operação já foi realizada, e devolver o registro existente permite que o cliente recupere o resultado sem duplicar a ativação. O `externalId` é a chave de idempotência — por isso **não** entra na comparação do conteúdo; comparamos apenas `customerId` e `productCode`.
+
+### Contrato do serviço (ActivationService ↔ ActivationServiceImpl)
+
+A interface `ActivationService` declara exatamente o contrato público — todo método abstrato tem implementação em `ActivationServiceImpl`:
+
+| Método na interface | Responsabilidade |
+|---------------------|------------------|
+| `create(ActivationRequestDTO)` | Valida campos, aplica a regra anti-duplicidade, persiste e agenda o dispatch pós-commit. Retorna `CreateActivationResult`. |
+| `findById(UUID)` | Consulta por id (`404` se inexistente). |
+| `list(status, customerId, pageable)` | Listagem paginada com filtros opcionais. |
+
+Os demais métodos da implementação (`validateRequest`, `createInTransaction`, `createNew`, `resolveExisting`, `recoverFromRace`, `registerAfterCommitDispatch`) são **privados** — detalhes internos do fluxo de criação (validação, transação, corrida, dispatch); não pertencem ao contrato.
+
+**Por que `CreateActivationResult` existe?** O controller precisa distinguir entre **criou** (201 Created) e **reencontrou um retry idempotente** (200 OK). O record `(dto, created)` carrega exatamente essa distinção; sem ele, o service devolveria apenas o DTO e o status HTTP ficaria ambíguo.
+
+### Fluxo de validação
+
+1. **Bean Validation no controller** (`@Valid` + `@NotBlank`/`@Size`/`@Pattern` no `ActivationRequestDTO`) → `400` com lista de erros por campo.
+2. **Regras de negócio no service** (defensivas — valem também para chamadas diretas, fora do HTTP):
+   - Campos não-brancos após `trim` → `InvalidActivationRequestException` → `400`;
+   - `externalId` já existente com conteúdo divergente → `DuplicateActivationException` → `409`;
+   - `externalId` já existente com mesmo conteúdo → registro existente → `200` (retry idempotente);
+   - Id inexistente → `ActivationNotFoundException` → `404`.
+3. **`GlobalExceptionHandler`** converte as exceptions em Problem Details (RFC 9457) — nunca stack trace nem detalhes internos ao consumidor. Erros internos do processamento assíncrono (ex.: provedor fora do ar) aparecem apenas nos logs do servidor, nunca na resposta da API.
 
 ### Integração com o provedor (item 5)
 
-- **Assíncrona pós-commit**: a API grava e retorna 201 imediatamente; a chamada ao provedor acontece após o `COMMIT` (via `TransactionSynchronization.afterCommit`), evitando manter transação de banco aberta durante HTTP.
+- **Assíncrona pós-commit, sem mensageria**: a API grava e retorna 201 imediatamente; a chamada ao provedor acontece após o `COMMIT` (via `TransactionSynchronization.afterCommit`), evitando manter transação de banco aberta durante HTTP. O assíncrono é um **`ThreadPoolTaskExecutor` local** (4 threads, fila de 100 — `AsyncConfig`); **não há Kafka/RabbitMQ/SQS** no meio do fluxo. Fila de mensageria é uma melhoria futura para escalar workers em múltiplas instâncias (ver [Microsserviços e cloud](#microsserviços-e-cloud-diferencial)).
+- **Observação sobre logs**: se o provedor (WireMock) não estiver no ar (`docker compose up -d`), o processamento do **primeiro** POST registra warnings/retries no terminal e o registro termina `FAILED` — isso é esperado e não tem relação com POSTs repetidos, que são atendidos pelo caminho idempotente (200) sem novo processamento.
 - **Cliente `RestClient`** com timeouts de conexão e leitura configuráveis (`PROVIDER_CONNECT_TIMEOUT_MS`, `PROVIDER_READ_TIMEOUT_MS`).
 - **Idempotência**: header `Idempotency-Key` enviado com o `externalId`, evitando ativação duplicada em timeout ambíguo (o provedor pode ter processado; ao reenviar com a mesma chave ele deduplica).
 - **Comportamento por retorno**:
@@ -284,7 +316,7 @@ Problem Details (RFC 9457) via `ProblemDetail` do Spring 6:
 
 | Nível | Ferramenta | O que cobre |
 |-------|-----------|-------------|
-| Unitário (sem Spring) | JUnit 5 + Mockito | Transições de domínio, lógica do `ActivationProcessor` |
+| Unitário (sem Spring) | JUnit 5 + Mockito | Transições de domínio, lógica do `ActivationProcessor`, validação e regras do `ActivationService` (duplicidade, corrida, trim) |
 | Web | `@WebMvcTest` + MockMvc | Validação de DTO, status codes, Problem Details, segurança (401/403) |
 | Integração | Testcontainers (PostgreSQL) + stub do provedor | Criação real, corrida concorrente (8 threads → 1 registro), processamento assíncrono (Awaitility) |
 

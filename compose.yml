@@ -1,0 +1,36 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: product-activation-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: product_activation
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-dev_password}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d product_activation"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  provider-mock:
+    image: wiremock/wiremock:3.12.1
+    container_name: product-activation-provider-mock
+    restart: unless-stopped
+    command: ["--global-response-templating", "--port", "9090"]
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./docker/provider-mock:/wiremock:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9090/__admin/health || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  postgres_data:

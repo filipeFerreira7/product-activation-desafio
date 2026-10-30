@@ -1,4 +1,3 @@
-# ---- Build stage ----
 FROM eclipse-temurin:21-jdk-alpine AS build
 WORKDIR /workspace
 COPY pom.xml mvnw ./

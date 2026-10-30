@@ -168,7 +168,7 @@ A aplicação fica em `http://localhost:8080`.
 ./mvnw verify
 ```
 
-Executa testes unitários (JUnit 5 + Mockito), testes de arquitetura (ArchUnit), testes de API (`@WebMvcTest` + MockMvc) e testes de integração com Testcontainers (PostgreSQL real) e stub do provedor. **71 testes, 0 falhas.** O mesmo comando roda no CI: GitHub Actions (`.github/workflows/ci.yml`) executa `./mvnw verify` a cada push/PR na `main`, com cache do Maven e upload dos relatórios em caso de falha.
+Executa testes unitários (JUnit 5 + Mockito), testes de arquitetura (ArchUnit), testes de API (`@WebMvcTest` + MockMvc) e testes de integração com Testcontainers (PostgreSQL real) e stub do provedor. **79 testes, 0 falhas.** O mesmo comando roda no CI: GitHub Actions (`.github/workflows/ci.yml`) executa `./mvnw verify` a cada push/PR na `main`, com cache do Maven e upload dos relatórios em caso de falha.
 
 ### Ambiente completo via Docker (produção / smoke test)
 
@@ -389,7 +389,23 @@ Problem Details (RFC 9457) via `ProblemDetail` do Spring 6:
 - Reintroduzir serviço `app` no compose via profile `full` para smoke test da imagem.
 
 ---
+## Configuração por variáveis de ambiente
 
+As configurações da aplicação utilizam variáveis de ambiente, permitindo adaptar a execução a diferentes ambientes sem modificar o código-fonte.
+
+Para facilitar a execução local e a avaliação do desafio, foram definidos valores padrão no `application.properties`. Dessa forma, caso as variáveis de ambiente não estejam configuradas, a aplicação utiliza automaticamente as configurações locais predefinidas.
+
+| Variável | Valor padrão |
+|---|---|
+| `DB_URL` | `jdbc:postgresql://localhost:5432/product_activation` |
+| `DB_USERNAME` | `app` |
+| `DB_PASSWORD` | `dev_password` |
+
+Em ambientes externos, recomenda-se configurar essas variáveis explicitamente, evitando depender dos valores padrão, especialmente para credenciais.
+
+**Observação:** os valores padrão são destinados exclusivamente ao desenvolvimento local e à facilitação da execução do projeto. Em produção, utilize credenciais seguras fornecidas pelo ambiente de execução.
 ## Uso de IA
 
 Assistente de IA utilizado para: análise do enunciado, diagnóstico do codebase, geração de migração Flyway, implementação e testes. Decisões de arquitetura (semântica 200/409, retry pós-commit, Resource Server condicional) foram tomadas/revisadas manualmente.
+A Inteligência Artificial serviu para: entendimento do desafio, arquitetura, geração de testes, sistema de apoio à decisão, sempre com uma revisão humana final. 
+

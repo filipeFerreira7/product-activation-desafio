@@ -10,19 +10,4 @@ public record ProviderRequestDTO(
         String costumerId,
         String productCode
 ) {
-
-    @Override
-    public boolean equals(Object obj) {
-        return false;
-    }
-
-    @Override
-    public int hashCode() {
-        return 0;
-    }
-
-    @Override
-    public String toString() {
-        return "";
-    }
 }

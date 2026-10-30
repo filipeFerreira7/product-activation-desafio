@@ -9,6 +9,8 @@ import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
 import jakarta.persistence.Version;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
 
 import java.time.Instant;
 import java.util.UUID;
@@ -17,6 +19,8 @@ import java.util.UUID;
 @Table(name = "activations", uniqueConstraints = {
         @UniqueConstraint(name = "uk_activations_external_id", columnNames = "external_id")
 })
+@Getter
+@NoArgsConstructor
 public class Activation {
 
     @Id
@@ -49,8 +53,6 @@ public class Activation {
     @Column(name = "version", nullable = false)
     private long version;
 
-    protected Activation() {
-    }
 
     private Activation(UUID id, String externalId, String customerId, String productCode, Instant now) {
         this.id = id;
@@ -108,39 +110,4 @@ public class Activation {
         return status == ActivationStatus.PENDING;
     }
 
-    public UUID getId() {
-        return id;
-    }
-
-    public String getExternalId() {
-        return externalId;
-    }
-
-    public String getCustomerId() {
-        return customerId;
-    }
-
-    public String getProductCode() {
-        return productCode;
-    }
-
-    public ActivationStatus getStatus() {
-        return status;
-    }
-
-    public int getAttemptCount() {
-        return attemptCount;
-    }
-
-    public Instant getCreatedAt() {
-        return createdAt;
-    }
-
-    public Instant getUpdatedAt() {
-        return updatedAt;
-    }
-
-    public long getVersion() {
-        return version;
-    }
 }

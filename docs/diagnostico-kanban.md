@@ -36,7 +36,7 @@
 | 7 | Integração assíncrona pós-commit com `RestClient`, timeouts, idempotency key, retry/backoff | ✅ |
 | 8 | Problem Details (RFC 9457) + `X-Trace-Id` de correlação | ✅ |
 | 9 | Security Resource Server condicional com escopos read/write | ✅ |
-| 10 | Dockerfile multi-stage (non-root) + Compose (app + postgres + WireMock) | ✅ |
+| 10 | Dockerfile multi-stage (non-root) + Compose (postgres + WireMock) | ✅ |
 | 11 | Testes: domínio, serviço, processor, MockMvc, segurança, integração Testcontainers (incl. corrida) | ✅ |
 | 12 | README + ADRs | ✅ |
 

@@ -1,17 +1,22 @@
 package br.com.filipe.product_activation.integration;
 
+import br.com.filipe.product_activation.dto.ProviderRequestDTO;
+import br.com.filipe.product_activation.dto.ProviderResponseDTO;
 import br.com.filipe.product_activation.exception.ProviderCommunicationException;
 import br.com.filipe.product_activation.model.Activation;
+import br.com.filipe.product_activation.model.ActivationStatus;
 import br.com.filipe.product_activation.repository.ActivationRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.ResourceAccessException;
 
+import java.security.Provider;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.UUID;
@@ -34,6 +39,10 @@ public class ActivationProcessor {
         }
     }
 
+    private sealed interface ProviderCall permits Answered, NetworkFailure{}
+    private record Answered(ProviderResponseDTO response) implements ProviderCall {}
+    private record NetworkFailure(String reason) implements ProviderCall {}
+
     @Autowired
     private ActivationRepository repository;
 
@@ -51,30 +60,79 @@ public class ActivationProcessor {
     private int maxAttempts;
 
     public ProcessResult processOnce(UUID activationId) {
-        return transactionTemplate.execute(status -> doProcessOnce(activationId));
+        ProviderRequestDTO request;
+
+        try{
+            request = transactionTemplate.execute(status -> claim(activationId));
+        } catch (ObjectOptimisticLockingFailureException ex) {
+            log.info("Solicitacao id={} reivindicada por outro worker", activationId);
+            return ProcessResult.of(ProcessOutcome.SKIP);
+        }
+        if (request == null){
+            return ProcessResult.of(ProcessOutcome.SKIP);
+        }
+
+        //sem transacao (chamada HTTP)
+        ProviderCall call = callProvider(request);
+
+        // tx curta: grava o resultado
+
+        try{
+            return transactionTemplate.execute(status -> finish(activationId, call));
+        } catch (ObjectOptimisticLockingFailureException ex){
+            log.warn("Resultado do provedor não gravado por conflito de versão id{}",activationId);
+            return ProcessResult.of(ProcessOutcome.SKIP);
+        }
     }
 
-    private ProcessResult doProcessOnce(UUID activationId) {
-        Activation activation = repository.findById(activationId).orElse(null);
-        if (activation == null || !activation.isProcessable()) {
+    private ProcessResult finish(UUID activationID, ProviderCall call) {
+        Activation activation = repository.findById(activationID).orElse(null);
+        if(activation == null || activation.getStatus() != ActivationStatus.PROCESSING){
+            log.warn("Solicitacao id={} nao esta mais em PROCESSING, resultado descartado", activationID);
             return ProcessResult.of(ProcessOutcome.SKIP);
+        }
+        return switch (call) {
+            case Answered answered -> applyProviderResponse(activation, answered.response());
+            case NetworkFailure failure -> applyRetryOrFailure(activation,null);
+        };
+    }
+
+    private ProviderCall callProvider(ProviderRequestDTO request) {
+        try {
+            return new Answered(providerClient.activate(request));
+        } catch (ResourceAccessException ex) {
+            log.warn("Timeout/erro de rede ao chamar provedor id{}: {}", request.id(), ex.getMessage());
+            return new NetworkFailure(ex.getMessage());
+        } catch (ProviderCommunicationException ex){
+            log.warn("Erro de comunicação com provedor id{}: {}", request.id(), ex.getMessage());
+            return new NetworkFailure(ex.getMessage());
+        } catch (RuntimeException ex) {
+            log.error("Erro inesperado ao chamar o provedor id={}",request.id(), ex);
+            return new NetworkFailure(ex.getMessage());
+        }
+    }
+
+
+    private ProviderRequestDTO claim(UUID activationId) {
+        Activation activation = repository.findById(activationId).orElse(null);
+        if(activation == null || !activation.isProcessable()){
+            return null;
         }
         activation.markProcessing(clock.instant());
         repository.saveAndFlush(activation);
 
-        try {
-            ProviderResponse response = providerClient.activate(activation);
-            return applyProviderResponse(activation, response);
-        } catch (ResourceAccessException ex) {
-            log.warn("Timeout/erro de rede ao chamar provedor id={}: {}", activationId, ex.getMessage());
-            return applyRetryOrFailure(activation, null);
-        } catch (ProviderCommunicationException ex) {
-            log.warn("Falha de comunicacao com provedor id={}: {}", activationId, ex.getMessage());
-            return applyRetryOrFailure(activation, null);
-        }
+        return new ProviderRequestDTO(
+                activation.getId(),
+                activation.getExternalId(),
+                activation.getCustomerId(),
+                activation.getProductCode()
+
+        );
     }
 
-    private ProcessResult applyProviderResponse(Activation activation, ProviderResponse response) {
+
+
+    private ProcessResult applyProviderResponse(Activation activation, ProviderResponseDTO response) {
         if (response.isSuccess()) {
             activation.markCompleted(clock.instant());
             return ProcessResult.of(ProcessOutcome.DONE);

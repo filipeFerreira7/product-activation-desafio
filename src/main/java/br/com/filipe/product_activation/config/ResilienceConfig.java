@@ -1,6 +1,6 @@
 package br.com.filipe.product_activation.config;
 
-import br.com.filipe.product_activation.integration.ProviderResponse;
+import br.com.filipe.product_activation.dto.ProviderResponseDTO;
 import io.github.resilience4j.common.circuitbreaker.configuration.CircuitBreakerConfigCustomizer;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -12,6 +12,6 @@ public class ResilienceConfig {
     public CircuitBreakerConfigCustomizer providerCircuitBreakerCustomizer() {
         return CircuitBreakerConfigCustomizer.of("provider",
                 builder -> builder.recordResult(
-                        response -> response instanceof ProviderResponse pr && pr.httpStatus() >= 500));
+                        response -> response instanceof ProviderResponseDTO pr && pr.httpStatus() >= 500));
     }
 }

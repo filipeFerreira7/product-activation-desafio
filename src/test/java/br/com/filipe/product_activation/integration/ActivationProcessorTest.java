@@ -1,5 +1,7 @@
 package br.com.filipe.product_activation.integration;
 
+import br.com.filipe.product_activation.dto.ProviderRequestDTO;
+import br.com.filipe.product_activation.dto.ProviderResponseDTO;
 import br.com.filipe.product_activation.model.Activation;
 import br.com.filipe.product_activation.model.ActivationStatus;
 import br.com.filipe.product_activation.repository.ActivationRepository;
@@ -66,7 +68,7 @@ class ActivationProcessorTest {
         Activation activation = pending();
         when(repository.findById(activation.getId())).thenReturn(Optional.of(activation));
         when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(providerClient.activate(any())).thenReturn(new ProviderResponse(200, "{\"ok\":true}"));
+        when(providerClient.activate(any())).thenReturn(new ProviderResponseDTO(200, "{\"ok\":true}"));
 
         ActivationProcessor.ProcessResult result = processor.processOnce(activation.getId());
 
@@ -79,7 +81,7 @@ class ActivationProcessorTest {
         Activation activation = pending();
         when(repository.findById(activation.getId())).thenReturn(Optional.of(activation));
         when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(providerClient.activate(any())).thenReturn(new ProviderResponse(400, "bad request"));
+        when(providerClient.activate(any())).thenReturn(new ProviderResponseDTO(400, "bad request"));
 
         ActivationProcessor.ProcessResult result = processor.processOnce(activation.getId());
 
@@ -93,7 +95,7 @@ class ActivationProcessorTest {
         Activation activation = pending();
         when(repository.findById(activation.getId())).thenReturn(Optional.of(activation));
         when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(providerClient.activate(any())).thenReturn(new ProviderResponse(500, "boom"));
+        when(providerClient.activate(any())).thenReturn(new ProviderResponseDTO(500, "boom"));
 
         ActivationProcessor.ProcessResult result = processor.processOnce(activation.getId());
 
@@ -108,7 +110,7 @@ class ActivationProcessorTest {
         Activation activation = pending();
         when(repository.findById(activation.getId())).thenReturn(Optional.of(activation));
         when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(providerClient.activate(any())).thenReturn(new ProviderResponse(429, "slow down", 7L));
+        when(providerClient.activate(any())).thenReturn(new ProviderResponseDTO(429, "slow down", 7L));
 
         ActivationProcessor.ProcessResult result = processor.processOnce(activation.getId());
 
@@ -141,7 +143,7 @@ class ActivationProcessorTest {
         activation.backToPending(clock.instant());
         when(repository.findById(activation.getId())).thenReturn(Optional.of(activation));
         when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(providerClient.activate(any())).thenReturn(new ProviderResponse(503, "unavailable"));
+        when(providerClient.activate(any())).thenReturn(new ProviderResponseDTO(503, "unavailable"));
 
         ActivationProcessor.ProcessResult result = processor.processOnce(activation.getId());
 

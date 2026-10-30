@@ -70,8 +70,17 @@ public class ActivationServiceImpl implements ActivationService {
         }
     }
 
+    private CreateActivationResult resolveExisting(Activation existing, ActivationRequestDTO dto) {
+        boolean sameContent = existing.getCustomerId().equals(dto.customerId().trim())
+                && existing.getProductCode().equals(dto.productCode().trim());
+        if (sameContent) {
+            log.info("Retry idempotente detectado, retornando registro existente id={}", existing.getId());
+            return new CreateActivationResult(ActivationResponseDTO.from(existing), false);
+        }
+        throw new DuplicateActivationException(dto.externalId());
+    }
     private CreateActivationResult createInTransaction(ActivationRequestDTO dto) {
-        String externalId = dto.externalId().trim();
+        String externalId = dto.externalId().trim(); // tratamento caso exista espaço em branco
         return repository.findByExternalId(externalId)
                 .map(existing -> resolveExisting(existing, dto))
                 .orElseGet(() -> createNew(dto, externalId));
@@ -98,15 +107,6 @@ public class ActivationServiceImpl implements ActivationService {
         return new CreateActivationResult(ActivationResponseDTO.from(saved), true);
     }
 
-    private CreateActivationResult resolveExisting(Activation existing, ActivationRequestDTO dto) {
-        boolean sameContent = existing.getCustomerId().equals(dto.customerId().trim())
-                && existing.getProductCode().equals(dto.productCode().trim());
-        if (sameContent) {
-            log.info("Retry idempotente detectado, retornando registro existente id={}", existing.getId());
-            return new CreateActivationResult(ActivationResponseDTO.from(existing), false);
-        }
-        throw new DuplicateActivationException(dto.externalId());
-    }
 
     private void registerAfterCommitDispatch(UUID id) {
         if (TransactionSynchronizationManager.isSynchronizationActive()) {

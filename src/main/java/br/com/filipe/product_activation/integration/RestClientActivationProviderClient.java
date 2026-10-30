@@ -1,5 +1,7 @@
 package br.com.filipe.product_activation.integration;
 
+import br.com.filipe.product_activation.dto.ProviderRequestDTO;
+import br.com.filipe.product_activation.dto.ProviderResponseDTO;
 import br.com.filipe.product_activation.model.Activation;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import org.slf4j.Logger;
@@ -22,23 +24,23 @@ public class RestClientActivationProviderClient implements ActivationProviderCli
 
     @Override
     @CircuitBreaker(name = "provider", fallbackMethod = "fallbackWhenUnavailable")
-    public ProviderResponse activate(Activation activation) {
+    public ProviderResponseDTO activate(ProviderRequestDTO request) {
         Map<String, Object> body = Map.of(
-                "externalId", activation.getExternalId(),
-                "customerId", activation.getCustomerId(),
-                "productCode", activation.getProductCode()
+                "externalId", request.externalId(),
+                "customerId", request.costumerId(),
+                "productCode", request.productCode()
         );
         return restClient.post()
                 .uri("/provider/v1/activate")
                 .contentType(MediaType.APPLICATION_JSON)
-                .header("Idempotency-Key", activation.getExternalId())
+                .header("Idempotency-Key", request.externalId())
                 .body(body)
-                .exchange((request, response) -> {
+                .exchange((req, response) -> {
                     String responseBody = "";
                     if (response.getBody() != null) {
                         responseBody = new String(response.getBody().readAllBytes(), StandardCharsets.UTF_8);
                     }
-                    return new ProviderResponse(
+                    return new ProviderResponseDTO(
                             response.getStatusCode().value(),
                             responseBody,
                             parseRetryAfterSeconds(response.getHeaders().getFirst("Retry-After")));
@@ -57,9 +59,9 @@ public class RestClientActivationProviderClient implements ActivationProviderCli
         }
     }
 
-    private ProviderResponse fallbackWhenUnavailable(Activation activation, Throwable cause) {
+    private ProviderResponseDTO fallbackWhenUnavailable(ProviderRequestDTO request, Throwable cause) {
         log.warn("Circuit breaker aberto ou falha de chamada para activationId={}: {}",
-                activation.getId(), cause.toString());
-        return new ProviderResponse(503, "provedor indisponivel (circuit breaker aberto)");
+                request.id(), cause.toString());
+        return new ProviderResponseDTO(503, "provedor indisponivel (circuit breaker aberto)");
     }
 }

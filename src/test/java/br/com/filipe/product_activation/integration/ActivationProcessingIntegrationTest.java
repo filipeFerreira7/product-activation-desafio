@@ -1,5 +1,7 @@
 package br.com.filipe.product_activation.integration;
 
+import br.com.filipe.product_activation.dto.ProviderRequestDTO;
+import br.com.filipe.product_activation.dto.ProviderResponseDTO;
 import br.com.filipe.product_activation.model.Activation;
 import br.com.filipe.product_activation.model.ActivationStatus;
 import br.com.filipe.product_activation.repository.ActivationRepository;
@@ -15,10 +17,6 @@ import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
-import java.time.Clock;
-import java.time.Instant;
-import java.time.ZoneOffset;
-import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 
@@ -59,10 +57,10 @@ class ActivationProcessingIntegrationTest {
 
     static class StubProviderClient implements ActivationProviderClient {
         final AtomicInteger calls = new AtomicInteger();
-        volatile Supplier<ProviderResponse> behavior = () -> new ProviderResponse(200, "{\"ok\":true}");
+        volatile Supplier<ProviderResponseDTO> behavior = () -> new ProviderResponseDTO(200, "{\"ok\":true}");
 
         @Override
-        public ProviderResponse activate(Activation activation) {
+        public ProviderResponseDTO activate(ProviderRequestDTO activation) {
             calls.incrementAndGet();
             return behavior.get();
         }
@@ -71,7 +69,7 @@ class ActivationProcessingIntegrationTest {
     @Test
     void createWithSuccessfulProviderMarksCompleted() {
         stubProviderClient.calls.set(0);
-        stubProviderClient.behavior = () -> new ProviderResponse(200, "{\"ok\":true}");
+        stubProviderClient.behavior = () -> new ProviderResponseDTO(200, "{\"ok\":true}");
         var result = activationService.create(
                 new br.com.filipe.product_activation.dto.ActivationRequestDTO("EXT-OK", "CUST-1", "INTERNET-500"));
         assertThat(result.created()).isTrue();
@@ -85,7 +83,7 @@ class ActivationProcessingIntegrationTest {
 
     @Test
     void createWithPermanentFailureMarksFailed() {
-        stubProviderClient.behavior = () -> new ProviderResponse(400, "invalid product");
+        stubProviderClient.behavior = () -> new ProviderResponseDTO(400, "invalid product");
         var result = activationService.create(
                 new br.com.filipe.product_activation.dto.ActivationRequestDTO("EXT-FAIL", "CUST-1", "UNKNOWN"));
 
@@ -98,7 +96,7 @@ class ActivationProcessingIntegrationTest {
     @Test
     void retryableFailureReturnsToPendingUntilMaxAttempts() {
         stubProviderClient.calls.set(0);
-        stubProviderClient.behavior = () -> new ProviderResponse(500, "boom");
+        stubProviderClient.behavior = () -> new ProviderResponseDTO(500, "boom");
         var result = activationService.create(
                 new br.com.filipe.product_activation.dto.ActivationRequestDTO("EXT-RETRY", "CUST-1", "INTERNET-500"));
 

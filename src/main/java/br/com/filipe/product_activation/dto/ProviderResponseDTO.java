@@ -1,8 +1,8 @@
-package br.com.filipe.product_activation.integration;
+package br.com.filipe.product_activation.dto;
 
-public record ProviderResponse(int httpStatus, String body, Long retryAfterSeconds) {
+public record ProviderResponseDTO(int httpStatus, String body, Long retryAfterSeconds) {
 
-    public ProviderResponse(int httpStatus, String body) {
+    public ProviderResponseDTO(int httpStatus, String body) {
         this(httpStatus, body, null);
     }
 

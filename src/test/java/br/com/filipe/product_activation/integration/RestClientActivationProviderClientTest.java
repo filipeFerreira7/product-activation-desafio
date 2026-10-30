@@ -92,4 +92,42 @@ class RestClientActivationProviderClientTest {
                 .isInstanceOf(org.springframework.web.client.ResourceAccessException.class)
                 .hasMessageContaining("timed out");
     }
+
+    @Test
+    void retryAfterHeaderIsParsedAsSeconds() {
+        setUp();
+        server.expect(once(), requestTo("http://provider.test/provider/v1/activate"))
+                .andRespond(withStatus(org.springframework.http.HttpStatus.TOO_MANY_REQUESTS)
+                        .header("Retry-After", "5")
+                        .body("slow down"));
+
+        ProviderResponse response = client.activate(activation());
+
+        assertThat(response.isRetryable()).isTrue();
+        assertThat(response.retryAfterSeconds()).isEqualTo(5L);
+    }
+
+    @Test
+    void missingRetryAfterHeaderYieldsNull() {
+        setUp();
+        server.expect(once(), requestTo("http://provider.test/provider/v1/activate"))
+                .andRespond(withStatus(org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE));
+
+        ProviderResponse response = client.activate(activation());
+
+        assertThat(response.retryAfterSeconds()).isNull();
+    }
+
+    @Test
+    void nonNumericRetryAfterHeaderYieldsNull() {
+        setUp();
+        server.expect(once(), requestTo("http://provider.test/provider/v1/activate"))
+                .andRespond(withStatus(org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE)
+                        .header("Retry-After", "Wed, 21 Oct 2026 07:28:00 GMT"));
+
+        ProviderResponse response = client.activate(activation());
+
+        assertThat(response.isRetryable()).isTrue();
+        assertThat(response.retryAfterSeconds()).isNull();
+    }
 }

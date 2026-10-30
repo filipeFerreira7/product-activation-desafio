@@ -38,8 +38,23 @@ public class RestClientActivationProviderClient implements ActivationProviderCli
                     if (response.getBody() != null) {
                         responseBody = new String(response.getBody().readAllBytes(), StandardCharsets.UTF_8);
                     }
-                    return new ProviderResponse(response.getStatusCode().value(), responseBody);
+                    return new ProviderResponse(
+                            response.getStatusCode().value(),
+                            responseBody,
+                            parseRetryAfterSeconds(response.getHeaders().getFirst("Retry-After")));
                 });
+    }
+
+    private Long parseRetryAfterSeconds(String header) {
+        if (header == null || header.isBlank()) {
+            return null;
+        }
+        try {
+            return Long.parseLong(header.trim());
+        } catch (NumberFormatException ex) {
+            log.debug("Header Retry-After nao interpretavel como segundos: {}", header);
+            return null;
+        }
     }
 
     private ProviderResponse fallbackWhenUnavailable(Activation activation, Throwable cause) {

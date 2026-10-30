@@ -5,6 +5,7 @@ import br.com.filipe.product_activation.dto.ActivationResponseDTO;
 import br.com.filipe.product_activation.dto.CreateActivationResult;
 import br.com.filipe.product_activation.model.ActivationStatus;
 import br.com.filipe.product_activation.service.ActivationService;
+import io.github.resilience4j.ratelimiter.annotation.RateLimiter;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
@@ -33,6 +34,7 @@ public class ActivationController {
     private ActivationService activationService;
 
     @PostMapping
+    @RateLimiter(name = "api")
     public ResponseEntity<ActivationResponseDTO> create(
             @Valid @RequestBody ActivationRequestDTO dto,
             UriComponentsBuilder uriBuilder) {
@@ -48,11 +50,13 @@ public class ActivationController {
     }
 
     @GetMapping("/{id}")
+    @RateLimiter(name = "api")
     public ResponseEntity<ActivationResponseDTO> getById(@PathVariable UUID id) {
         return ResponseEntity.ok(activationService.findById(id));
     }
 
     @GetMapping
+    @RateLimiter(name = "api")
     public ResponseEntity<PagedModel<ActivationResponseDTO>> list(
             @RequestParam(required = false) ActivationStatus status,
             @RequestParam(required = false) String customerId,

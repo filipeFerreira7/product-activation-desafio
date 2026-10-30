@@ -17,6 +17,7 @@ import org.springframework.transaction.support.SimpleTransactionStatus;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.Optional;
@@ -67,9 +68,9 @@ class ActivationProcessorTest {
         when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
         when(providerClient.activate(any())).thenReturn(new ProviderResponse(200, "{\"ok\":true}"));
 
-        ActivationProcessor.ProcessOutcome outcome = processor.processOnce(activation.getId());
+        ActivationProcessor.ProcessResult result = processor.processOnce(activation.getId());
 
-        assertThat(outcome).isEqualTo(ActivationProcessor.ProcessOutcome.DONE);
+        assertThat(result.outcome()).isEqualTo(ActivationProcessor.ProcessOutcome.DONE);
         assertThat(activation.getStatus()).isEqualTo(ActivationStatus.COMPLETED);
     }
 
@@ -80,25 +81,40 @@ class ActivationProcessorTest {
         when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
         when(providerClient.activate(any())).thenReturn(new ProviderResponse(400, "bad request"));
 
-        ActivationProcessor.ProcessOutcome outcome = processor.processOnce(activation.getId());
+        ActivationProcessor.ProcessResult result = processor.processOnce(activation.getId());
 
-        assertThat(outcome).isEqualTo(ActivationProcessor.ProcessOutcome.DONE);
+        assertThat(result.outcome()).isEqualTo(ActivationProcessor.ProcessOutcome.DONE);
         assertThat(activation.getStatus()).isEqualTo(ActivationStatus.FAILED);
         assertThat(activation.getAttemptCount()).isZero();
     }
 
     @Test
-    void serverError500RequestsRetry() {
+    void serverError500RequestsRetryWithoutRetryAfter() {
         Activation activation = pending();
         when(repository.findById(activation.getId())).thenReturn(Optional.of(activation));
         when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
         when(providerClient.activate(any())).thenReturn(new ProviderResponse(500, "boom"));
 
-        ActivationProcessor.ProcessOutcome outcome = processor.processOnce(activation.getId());
+        ActivationProcessor.ProcessResult result = processor.processOnce(activation.getId());
 
-        assertThat(outcome).isEqualTo(ActivationProcessor.ProcessOutcome.RETRY);
+        assertThat(result.outcome()).isEqualTo(ActivationProcessor.ProcessOutcome.RETRY);
+        assertThat(result.retryAfter()).isNull();
         assertThat(activation.getStatus()).isEqualTo(ActivationStatus.PENDING);
         assertThat(activation.getAttemptCount()).isEqualTo(1);
+    }
+
+    @Test
+    void retryableStatusWithRetryAfterCarriesDelayToResult() {
+        Activation activation = pending();
+        when(repository.findById(activation.getId())).thenReturn(Optional.of(activation));
+        when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(providerClient.activate(any())).thenReturn(new ProviderResponse(429, "slow down", 7L));
+
+        ActivationProcessor.ProcessResult result = processor.processOnce(activation.getId());
+
+        assertThat(result.outcome()).isEqualTo(ActivationProcessor.ProcessOutcome.RETRY);
+        assertThat(result.retryAfter()).isEqualTo(Duration.ofSeconds(7));
+        assertThat(activation.getStatus()).isEqualTo(ActivationStatus.PENDING);
     }
 
     @Test
@@ -108,9 +124,10 @@ class ActivationProcessorTest {
         when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
         when(providerClient.activate(any())).thenThrow(new ResourceAccessException("timeout"));
 
-        ActivationProcessor.ProcessOutcome outcome = processor.processOnce(activation.getId());
+        ActivationProcessor.ProcessResult result = processor.processOnce(activation.getId());
 
-        assertThat(outcome).isEqualTo(ActivationProcessor.ProcessOutcome.RETRY);
+        assertThat(result.outcome()).isEqualTo(ActivationProcessor.ProcessOutcome.RETRY);
+        assertThat(result.retryAfter()).isNull();
         assertThat(activation.getStatus()).isEqualTo(ActivationStatus.PENDING);
         assertThat(activation.getAttemptCount()).isEqualTo(1);
     }
@@ -126,9 +143,9 @@ class ActivationProcessorTest {
         when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
         when(providerClient.activate(any())).thenReturn(new ProviderResponse(503, "unavailable"));
 
-        ActivationProcessor.ProcessOutcome outcome = processor.processOnce(activation.getId());
+        ActivationProcessor.ProcessResult result = processor.processOnce(activation.getId());
 
-        assertThat(outcome).isEqualTo(ActivationProcessor.ProcessOutcome.DONE);
+        assertThat(result.outcome()).isEqualTo(ActivationProcessor.ProcessOutcome.DONE);
         assertThat(activation.getStatus()).isEqualTo(ActivationStatus.FAILED);
         assertThat(activation.getAttemptCount()).isEqualTo(3);
     }
@@ -140,9 +157,9 @@ class ActivationProcessorTest {
         activation.markCompleted(clock.instant());
         when(repository.findById(activation.getId())).thenReturn(Optional.of(activation));
 
-        ActivationProcessor.ProcessOutcome outcome = processor.processOnce(activation.getId());
+        ActivationProcessor.ProcessResult result = processor.processOnce(activation.getId());
 
-        assertThat(outcome).isEqualTo(ActivationProcessor.ProcessOutcome.SKIP);
+        assertThat(result.outcome()).isEqualTo(ActivationProcessor.ProcessOutcome.SKIP);
         verify(providerClient, never()).activate(any());
     }
 
@@ -151,9 +168,9 @@ class ActivationProcessorTest {
         UUID missing = UUID.randomUUID();
         when(repository.findById(missing)).thenReturn(Optional.empty());
 
-        ActivationProcessor.ProcessOutcome outcome = processor.processOnce(missing);
+        ActivationProcessor.ProcessResult result = processor.processOnce(missing);
 
-        assertThat(outcome).isEqualTo(ActivationProcessor.ProcessOutcome.SKIP);
+        assertThat(result.outcome()).isEqualTo(ActivationProcessor.ProcessOutcome.SKIP);
         verify(providerClient, never()).activate(any());
     }
 }

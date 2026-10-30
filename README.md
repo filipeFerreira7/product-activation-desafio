@@ -82,7 +82,7 @@ Serviço de ativação de produtos: registro de solicitações de ativação, co
 | **Serviço** | `ActivationServiceImpl` | Validação defensiva de campos, orquestração de criação (anti-duplicidade + retry idempotente), consulta, listagem paginada |
 | **Persistência** | `ActivationRepository`, Flyway `V1__create_activations_table.sql` | Acesso a dados JPA, migração versionada, constraint `UNIQUE` |
 | **Integração** | `ActivationDispatcher`, `ActivationProcessor`, `RestClientActivationProviderClient` | Chamada assíncrona pós-commit ao provedor, retry com backoff, transição de status por retorno HTTP |
-| **Transversal** | `GlobalExceptionHandler`, `CorrelationIdFilter`, `SecurityConfig`, `AsyncConfig`, `TransactionConfig`, `ResilienceConfig` | Problem Details (RFC 9457), correlação de erro (`X-Trace-Id`), OAuth2 Resource Server condicional, thread pool, template de transação, circuit breaker do provedor |
+| **Transversal** | `GlobalExceptionHandler`, `CorrelationIdFilter`, `SecurityConfig`, `AsyncConfig`, `TransactionConfig`, `ResilienceConfig` | Problem Details (RFC 9457), correlação de erro (`X-Trace-Id`), OAuth2 Resource Server condicional, thread pool, template de transação, circuit breaker do provedor, rate limit da API |
 
 ### Decisões de empacotamento
 
@@ -168,7 +168,7 @@ A aplicação fica em `http://localhost:8080`.
 ./mvnw verify
 ```
 
-Executa testes unitários (JUnit 5 + Mockito), testes de API (`@WebMvcTest` + MockMvc) e testes de integração com Testcontainers (PostgreSQL real) e stub do provedor. **57 testes, 0 falhas.** O mesmo comando roda no CI: GitHub Actions (`.github/workflows/ci.yml`) executa `./mvnw verify` a cada push/PR na `main`, com cache do Maven e upload dos relatórios em caso de falha.
+Executa testes unitários (JUnit 5 + Mockito), testes de arquitetura (ArchUnit), testes de API (`@WebMvcTest` + MockMvc) e testes de integração com Testcontainers (PostgreSQL real) e stub do provedor. **71 testes, 0 falhas.** O mesmo comando roda no CI: GitHub Actions (`.github/workflows/ci.yml`) executa `./mvnw verify` a cada push/PR na `main`, com cache do Maven e upload dos relatórios em caso de falha.
 
 ### Ambiente completo via Docker (produção / smoke test)
 
@@ -280,6 +280,7 @@ Os demais métodos da implementação (`validateRequest`, `createInTransaction`,
   | HTTP 429/408/503 | `PENDING` (retry) com backoff | Sim | Rate limit / temporário |
 
 - **Retry com backoff linear** (`backoff-ms * tentativa`), limite de tentativas em `app.provider.max-attempts`.
+- **Header `Retry-After` honrado**: quando o provedor responde `429`/`503` com `Retry-After: <segundos>`, o dispatcher usa esse valor como delay da próxima tentativa no lugar do backoff linear — com teto `app.provider.retry-after-max-ms` (30s, para não prender o worker num delay abusivo do provedor). Valor não numérico (ex.: data HTTP) é ignorado e cai no backoff padrão.
 - **Circuit breaker (Resilience4j)** — [ADR-006](docs/adr/ADR-006-circuit-breaker-resilience4j.md): `@CircuitBreaker(name = "provider")` envolve `RestClientActivationProviderClient.activate`, a única porta de saída para o provedor. Falhas registradas: exceções de rede e respostas HTTP `>= 500`. Com o breaker aberto, o `fallbackMethod` devolve `503` sintético, que segue o mesmo caminho de retry (fail-fast, sem tocar a rede). Config: janela COUNT_BASED de 10, mínimo 5 chamadas, 50% de falhas, 10s em open, 3 em half-open. Estado em `/actuator/circuitbreakers`.
 - **Modo de processamento** configurável: `ASYNC` (default), `SYNC` ou `DISABLED` (testes).
 
@@ -300,8 +301,16 @@ Problem Details (RFC 9457) via `ProblemDetail` do Spring 6:
 - 400 validação (lista de erros por campo)
 - 404 inexistente
 - 409 duplicidade / transição inválida
+- 429 rate limit excedido (`RequestNotPermitted` do Resilience4j)
 - 500 genérico (sem stack trace)
 - Header `X-Trace-Id` para correlação (propagado para logs)
+
+### Rate limiting (diferencial)
+
+- `@RateLimiter(name = "api")` (Resilience4j) nos três endpoints do controller: **100 requisições/min por instância** por default (`RATE_LIMIT_PER_MINUTE`), sem espera (`timeout-duration=0`) — excedeu, responde `429` Problem Detail na hora.
+- Limites por instância (cada réplica conta a si mesma); em produção o limite real sairia do gateway ou por consumer via JWT — o plugin é um piso de proteção, não a política final.
+- Estado/métricas em `/actuator/ratelimiters`.
+- Teste de integração: `ActivationRateLimitIntegrationTest` sobe o contexto com `limit-for-period=2` e valida `200, 200, 429`.
 
 ### Segurança (item 7)
 
@@ -320,9 +329,10 @@ Problem Details (RFC 9457) via `ProblemDetail` do Spring 6:
 
 | Nível | Ferramenta | O que cobre |
 |-------|-----------|-------------|
-| Unitário (sem Spring) | JUnit 5 + Mockito | Transições de domínio, lógica do `ActivationProcessor`, validação e regras do `ActivationService` (duplicidade, corrida, trim) |
+| Unitário (sem Spring) | JUnit 5 + Mockito | Transições de domínio, lógica do `ActivationProcessor` (incl. `Retry-After` → `ProcessResult`), delay/cap do `ActivationDispatcher`, validação e regras do `ActivationService` (duplicidade, corrida, trim) |
+| Arquitetura | ArchUnit (`ArchitectureTest`) | Controller não acessa `repository`/`integration`; service não conhece controller; `model` não depende de camada superior; `repository` só interfaces; `dto` não acessa persistência/integração |
 | Web | `@WebMvcTest` + MockMvc | Validação de DTO, status codes, Problem Details, segurança (401/403) |
-| Integração | Testcontainers (PostgreSQL) + stub do provedor | Criação real, corrida concorrente (8 threads → 1 registro), processamento assíncrono (Awaitility), circuit breaker abrindo com provedor falhando (fail-fast sem chamada de rede) |
+| Integração | Testcontainers (PostgreSQL) + stub do provedor | Criação real, corrida concorrente (8 threads → 1 registro), processamento assíncrono (Awaitility), circuit breaker abrindo com provedor falhando (fail-fast sem chamada de rede), rate limit respondendo 429 |
 
 ---
 
@@ -367,7 +377,7 @@ Problem Details (RFC 9457) via `ProblemDetail` do Spring 6:
 ## Pontos pendentes
 
 - Isolamento entre consumidores (BOLA) — requer claims no JWT mapeadas por tenant.
-- Rate limiting — faria com bucket4j ou gateway (Kong/APISIX).
+- Rate limit por consumidor — o limite atual é por instância; para limite por tenant/consumer seria preciso keyar o `RateLimiter` via JWT (melhoria natural do `@RateLimiter` atual).
 
 ---
 

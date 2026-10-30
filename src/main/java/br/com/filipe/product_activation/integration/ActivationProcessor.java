@@ -13,6 +13,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.ResourceAccessException;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.util.UUID;
 
 @Component
@@ -24,6 +25,13 @@ public class ActivationProcessor {
         SKIP,
         DONE,
         RETRY
+    }
+
+    public record ProcessResult(ProcessOutcome outcome, Duration retryAfter) {
+
+        static ProcessResult of(ProcessOutcome outcome) {
+            return new ProcessResult(outcome, null);
+        }
     }
 
     @Autowired
@@ -42,50 +50,53 @@ public class ActivationProcessor {
     @Value("${app.provider.max-attempts:3}")
     private int maxAttempts;
 
-    public ProcessOutcome processOnce(UUID activationId) {
+    public ProcessResult processOnce(UUID activationId) {
         return transactionTemplate.execute(status -> doProcessOnce(activationId));
     }
 
-    private ProcessOutcome doProcessOnce(UUID activationId) {
+    private ProcessResult doProcessOnce(UUID activationId) {
         Activation activation = repository.findById(activationId).orElse(null);
         if (activation == null || !activation.isProcessable()) {
-            return ProcessOutcome.SKIP;
+            return ProcessResult.of(ProcessOutcome.SKIP);
         }
         activation.markProcessing(clock.instant());
         repository.saveAndFlush(activation);
 
         try {
             ProviderResponse response = providerClient.activate(activation);
-            return applyProviderResponse(activation, response.httpStatus());
+            return applyProviderResponse(activation, response);
         } catch (ResourceAccessException ex) {
             log.warn("Timeout/erro de rede ao chamar provedor id={}: {}", activationId, ex.getMessage());
-            return applyRetryOrFailure(activation);
+            return applyRetryOrFailure(activation, null);
         } catch (ProviderCommunicationException ex) {
             log.warn("Falha de comunicacao com provedor id={}: {}", activationId, ex.getMessage());
-            return applyRetryOrFailure(activation);
+            return applyRetryOrFailure(activation, null);
         }
     }
 
-    private ProcessOutcome applyProviderResponse(Activation activation, int httpStatus) {
-        if (httpStatus >= 200 && httpStatus < 300) {
+    private ProcessResult applyProviderResponse(Activation activation, ProviderResponse response) {
+        if (response.isSuccess()) {
             activation.markCompleted(clock.instant());
-            return ProcessOutcome.DONE;
+            return ProcessResult.of(ProcessOutcome.DONE);
         }
-        if (httpStatus == 408 || httpStatus == 429 || httpStatus >= 500) {
-            return applyRetryOrFailure(activation);
+        if (response.isRetryable()) {
+            Duration retryAfter = response.retryAfterSeconds() != null
+                    ? Duration.ofSeconds(response.retryAfterSeconds())
+                    : null;
+            return applyRetryOrFailure(activation, retryAfter);
         }
         activation.markFailed(clock.instant());
-        return ProcessOutcome.DONE;
+        return ProcessResult.of(ProcessOutcome.DONE);
     }
 
-    private ProcessOutcome applyRetryOrFailure(Activation activation) {
+    private ProcessResult applyRetryOrFailure(Activation activation, Duration retryAfter) {
         int attempt = activation.registerAttempt();
         if (attempt >= maxAttempts) {
             activation.markFailed(clock.instant());
             log.info("Limite de tentativas atingido id={} attempts={}", activation.getId(), attempt);
-            return ProcessOutcome.DONE;
+            return ProcessResult.of(ProcessOutcome.DONE);
         }
         activation.backToPending(clock.instant());
-        return ProcessOutcome.RETRY;
+        return new ProcessResult(ProcessOutcome.RETRY, retryAfter);
     }
 }

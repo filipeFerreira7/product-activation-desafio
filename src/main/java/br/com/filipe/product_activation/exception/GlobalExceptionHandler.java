@@ -1,5 +1,6 @@
 package br.com.filipe.product_activation.exception;
 
+import io.github.resilience4j.ratelimiter.RequestNotPermitted;
 import jakarta.validation.ConstraintViolationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -56,6 +57,12 @@ public class GlobalExceptionHandler {
     public ProblemDetail handleBadRequest(Exception ex) {
         return problem(HttpStatus.BAD_REQUEST, "Requisicao invalida",
                 "Corpo ou parametros da requisicao invalidos.");
+    }
+
+    @ExceptionHandler(RequestNotPermitted.class)
+    public ProblemDetail handleRequestNotPermitted(RequestNotPermitted ex) {
+        return problem(HttpStatus.TOO_MANY_REQUESTS, "Limite de requisicoes excedido",
+                "Muitas requisicoes em um curto periodo. Tente novamente mais tarde.");
     }
 
     @ExceptionHandler(ActivationNotFoundException.class)

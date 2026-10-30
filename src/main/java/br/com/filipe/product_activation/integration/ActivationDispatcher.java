@@ -31,6 +31,9 @@ public class ActivationDispatcher {
     @Value("${app.provider.backoff-ms:200}")
     private long backoffMs;
 
+    @Value("${app.provider.retry-after-max-ms:30000}")
+    private long retryAfterMaxMs;
+
     public void dispatch(UUID activationId) {
         switch (mode.toUpperCase()) {
             case "SYNC" -> runWithRetries(activationId);
@@ -43,12 +46,19 @@ public class ActivationDispatcher {
 
     private void runWithRetries(UUID activationId) {
         for (int attempt = 0; attempt < maxAttempts; attempt++) {
-            ActivationProcessor.ProcessOutcome outcome = processor.processOnce(activationId);
-            if (outcome != ActivationProcessor.ProcessOutcome.RETRY) {
+            ActivationProcessor.ProcessResult result = processor.processOnce(activationId);
+            if (result.outcome() != ActivationProcessor.ProcessOutcome.RETRY) {
                 return;
             }
-            sleep(backoffMs * (attempt + 1));
+            sleep(waitMillis(result, attempt));
         }
+    }
+
+    private long waitMillis(ActivationProcessor.ProcessResult result, int attempt) {
+        if (result.retryAfter() != null) {
+            return Math.min(Math.max(result.retryAfter().toMillis(), 0), retryAfterMaxMs);
+        }
+        return backoffMs * (attempt + 1);
     }
 
     private void sleep(long millis) {
